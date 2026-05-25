@@ -64,7 +64,7 @@
 <body>
   <div class="header">
     <h1>附近美食</h1>
-    <p id="subtitle">正在定位...</p>
+    <p id="subtitle">正在加载地图...</p>
   </div>
   <div class="status-bar" id="statusBar">
     <div class="spinner" id="spinner"></div>
@@ -82,7 +82,7 @@
     const AMAP_KEY = '7d3a1e74b331280d4261b104d9d686b7';
     window._AMapSecurityConfig = { securityJsCode: '' };
 
-    let map, placeSearch, markers = [];
+    let map, placeSearch, markers = [], userLng, userLat;
 
     const cuisineIcons = {
       '中餐': '🥢', '火锅': '🫕', '烧烤': '🍖', '面馆': '🍜', '面条': '🍜',
@@ -122,7 +122,7 @@
     }
 
     function renderList(pois) {
-      const list = document.getElementById('list');
+      var list = document.getElementById('list');
       if (pois.length === 0) {
         list.innerHTML = '<div class="empty"><div class="emoji">😔</div><p>10km 内没有搜到美食</p></div>';
         return;
@@ -130,95 +130,102 @@
       clearMarkers();
       list.innerHTML = '';
 
-      pois.forEach((p, i) => {
-        const { icon, bg } = getIcon(p.type);
-        const dist = p.distance < 1000 ? `${p.distance}m` : `${(p.distance / 1000).toFixed(1)}km`;
+      pois.forEach(function(p, i) {
+        var iconBg = getIcon(p.type);
+        var dist = p.distance < 1000 ? p.distance + 'm' : (p.distance / 1000).toFixed(1) + 'km';
 
-        const marker = new AMap.Marker({
+        var marker = new AMap.Marker({
           position: [p.lng, p.lat],
-          content: `<div class="marker-label">${i + 1}</div>`,
+          content: '<div class="marker-label">' + (i + 1) + '</div>',
           offset: new AMap.Pixel(-14, -14),
         });
         marker.setMap(map);
-        marker.on('click', () => {
-          new AMap.InfoWindow({
-            content: `<div style="padding:4px;"><b>${p.name}</b><br>${p.type || '美食'}<br>⭐ ${p.rating}  📍 ${dist}<br><span style="color:#999;font-size:12px;">${p.address || ''}</span></div>`,
-            offset: new AMap.Pixel(0, -30),
-          }).open(map, [p.lng, p.lat]);
-          map.setZoomAndCenter(16, [p.lng, p.lat]);
-        });
+        marker.on('click', (function(mLat, mLng, mName, mType, mRating, mDist, mAddr) {
+          return function() {
+            new AMap.InfoWindow({
+              content: '<div style="padding:4px;"><b>' + mName + '</b><br>' + (mType || '美食') + '<br>⭐ ' + mRating + '  📍 ' + mDist + '<br><span style="color:#999;font-size:12px;">' + (mAddr || '') + '</span></div>',
+              offset: new AMap.Pixel(0, -30),
+            }).open(map, [mLng, mLat]);
+            map.setZoomAndCenter(16, [mLng, mLat]);
+          };
+        })(p.lng, p.lat, p.name, p.type, p.rating, dist, p.address));
         markers.push(marker);
 
-        const card = document.createElement('div');
+        var card = document.createElement('div');
         card.className = 'card';
-        card.innerHTML = `
-          <div class="icon" style="background:${bg}">${icon}</div>
-          <div class="info">
-            <div class="name">${i + 1}. ${p.name}</div>
-            <div class="type">${p.type || '美食'}</div>
-            <div class="rating">⭐ ${p.rating}</div>
-            <div class="meta">
-              <span class="distance">📍 ${dist}</span>
-              <span class="address">${p.address || ''}</span>
-            </div>
-          </div>
-          <div class="arrow">›</div>
-        `;
-        card.addEventListener('click', () => map.setZoomAndCenter(16, [p.lng, p.lat]));
+        card.innerHTML =
+          '<div class="icon" style="background:' + iconBg.bg + '">' + iconBg.icon + '</div>' +
+          '<div class="info">' +
+            '<div class="name">' + (i + 1) + '. ' + p.name + '</div>' +
+            '<div class="type">' + (p.type || '美食') + '</div>' +
+            '<div class="rating">⭐ ' + p.rating + '</div>' +
+            '<div class="meta">' +
+              '<span class="distance">📍 ' + dist + '</span>' +
+              '<span class="address">' + (p.address || '') + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="arrow">›</div>';
+        card.addEventListener('click', (function(mLat, mLng) {
+          return function() { map.setZoomAndCenter(16, [mLng, mLat]); };
+        })(p.lat, p.lng));
         list.appendChild(card);
       });
     }
 
-    function searchNearby(lng, lat) {
+    function doSearch(lng, lat) {
+      placeSearch = new AMap.PlaceSearch({ pageSize: 25, pageIndex: 1, extensions: 'all' });
+      placeSearch.setLocation([lng, lat]);
+      placeSearch.setRadius(10000);
+
       updateStatus('正在搜索附近美食...', true);
       document.getElementById('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
 
-      const keywords = ['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃'];
-      let allResults = [];
-      let completed = 0;
-      let failed = 0;
+      var keywords = ['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃'];
+      var allResults = [];
+      var completed = 0;
+      var failed = 0;
 
-      keywords.forEach(keyword => {
-        placeSearch.search(keyword, (status, result) => {
+      keywords.forEach(function(keyword) {
+        placeSearch.search(keyword, function(status, result) {
           completed++;
           if (status === 'complete' && result.poiList) {
             allResults = allResults.concat(
-              result.poiList.pois.filter(p => p.distance <= 10000)
+              result.poiList.pois.filter(function(p) { return p.distance <= 10000; })
             );
           } else {
             failed++;
           }
           if (completed === keywords.length) {
-            if (allResults.length === 0 && failed > 0) {
-              showError('搜索失败，可能 Key 未配置域名白名单。请到高德开放平台将 chui2.github.io 加到白名单');
+            if (allResults.length === 0) {
+              if (failed === completed) {
+                showError('搜索失败，请确认高德 Key 白名单已添加 chui2.github.io');
+              } else {
+                renderList([]);
+                updateStatus('未找到结果', false);
+                document.getElementById('subtitle').textContent = '周围 10km 没有搜到美食';
+              }
               return;
             }
-            const seen = new Set();
-            const pois = allResults
-              .filter(p => {
-                const key = `${p.name}|${p.address}`;
+            var seen = new Set();
+            var pois = allResults
+              .filter(function(p) {
+                var key = p.name + '|' + p.address;
                 if (seen.has(key)) return false;
                 seen.add(key);
                 return true;
               })
-              .sort((a, b) => a.distance - b.distance)
+              .sort(function(a, b) { return a.distance - b.distance; })
               .slice(0, 50);
 
             renderList(pois);
-            updateStatus(`找到 ${pois.length} 家美食`, false);
-            document.getElementById('subtitle').textContent = `周围 10km 共 ${pois.length} 家`;
+            updateStatus('找到 ' + pois.length + ' 家美食', false);
+            document.getElementById('subtitle').textContent = '周围 10km 共 ' + pois.length + ' 家';
           }
         });
       });
     }
 
-    function setupMapAndSearch(lng, lat) {
-      document.getElementById('subtitle').textContent = '已定位，正在搜索...';
-      updateStatus(`已定位 (${lng.toFixed(4)}, ${lat.toFixed(4)})`, false);
-
-      map.setZoomAndCenter(14, [lng, lat]);
-
-      // 用户位置标记
+    function markUserLocation(lng, lat) {
       new AMap.Marker({
         position: [lng, lat],
         content: '<div style="width:20px;height:20px;background:#4285f4;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(66,133,244,0.6);"></div>',
@@ -226,7 +233,6 @@
         zIndex: 100,
       }).setMap(map);
 
-      // 10km 范围圈
       new AMap.Circle({
         center: [lng, lat],
         radius: 10000,
@@ -236,91 +242,100 @@
         fillColor: '#ff6b35',
         fillOpacity: 0.05,
       }).setMap(map);
-
-      placeSearch = new AMap.PlaceSearch({
-        pageSize: 25,
-        pageIndex: 1,
-        extensions: 'all',
-      });
-      placeSearch.setLocation([lng, lat]);
-      placeSearch.setRadius(10000);
-
-      searchNearby(lng, lat);
     }
 
-    function loadAMapScript(key) {
-      return new Promise((resolve, reject) => {
-        if (window.AMap) { resolve(); return; }
-        const script = document.createElement('script');
-        script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.PlaceSearch,AMap.Scale`;
-        script.onload = () => {
-          // 等 AMap 真正就绪
-          let tries = 0;
-          const check = setInterval(() => {
-            tries++;
-            if (window.AMap && window.AMap.Map) {
-              clearInterval(check);
-              resolve();
-            } else if (tries > 30) {
-              clearInterval(check);
-              reject(new Error('AMap 初始化超时'));
-            }
-          }, 200);
-        };
-        script.onerror = () => reject(new Error('高德地图脚本加载失败'));
-        document.head.appendChild(script);
-      });
+    function onLocated(lng, lat) {
+      userLng = lng;
+      userLat = lat;
+      document.getElementById('subtitle').textContent = '已定位，正在搜索...';
+      updateStatus('已定位 (' + lng.toFixed(4) + ', ' + lat.toFixed(4) + ')', false);
+      map.setZoomAndCenter(14, [lng, lat]);
+      markUserLocation(lng, lat);
+      doSearch(lng, lat);
     }
 
-    function getBrowserLocation() {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error('浏览器不支持定位'));
-          return;
-        }
-        updateStatus('正在获取位置（需授权）...', true);
-        navigator.geolocation.getCurrentPosition(
-          pos => resolve({ lng: pos.coords.longitude, lat: pos.coords.latitude }),
-          err => {
-            let msg = '定位失败';
-            if (err.code === 1) msg = '请允许定位权限后刷新页面';
-            else if (err.code === 2) msg = '无法获取位置信息，请检查设备GPS';
-            else if (err.code === 3) msg = '定位超时，请刷新重试';
-            reject(new Error(msg));
-          },
-          { enableHighAccuracy: true, timeout: 20000, maximumAge: 120000 }
-        );
-      });
+    function tryGeolocation() {
+      updateStatus('正在获取位置（请允许浏览器定位请求）...', true);
+
+      var resolved = false;
+
+      navigator.geolocation.getCurrentPosition(
+        function(pos) {
+          if (resolved) return;
+          resolved = true;
+          onLocated(pos.coords.longitude, pos.coords.latitude);
+        },
+        function(err) {
+          if (resolved) return;
+          resolved = true;
+          var msg = '定位失败：';
+          if (err.code === 1) msg += '请允许定位权限后刷新页面';
+          else if (err.code === 2) msg += '无法获取位置';
+          else msg += '超时';
+          updateStatus('定位失败，可手动搜索', false);
+          document.getElementById('subtitle').textContent = msg + '，下方列表可手动选择城市';
+          // 默认北京天安门
+          var defLng = 116.3974, defLat = 39.9092;
+          map.setZoomAndCenter(12, [defLng, defLat]);
+          doSearch(defLng, defLat);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 }
+      );
+
+      // 硬超时：12 秒后如果还没回调就走默认
+      setTimeout(function() {
+        if (resolved) return;
+        resolved = true;
+        updateStatus('定位超时，使用默认位置（北京）', false);
+        document.getElementById('subtitle').textContent = '定位超时，已使用默认位置搜索';
+        var defLng = 116.3974, defLat = 39.9092;
+        map.setZoomAndCenter(12, [defLng, defLat]);
+        doSearch(defLng, defLat);
+      }, 12000);
     }
 
     // --- 主流程 ---
-    async function main() {
+    function main() {
       if (AMAP_KEY === 'YOUR_AMAP_KEY') {
-        updateStatus('⛔ 请先配置 API Key', false);
-        document.getElementById('list').innerHTML = `
-          <div class="error"><p>⚠️ 尚未配置高德地图 API Key</p></div>`;
+        updateStatus('缺少 API Key', false);
+        document.getElementById('list').innerHTML =
+          '<div class="error"><p>⚠️ 尚未配置高德地图 API Key</p></div>';
         return;
       }
 
-      try {
-        // 1. 并行：浏览器定位 + 加载高德地图
-        updateStatus('正在加载...', true);
-        const [location, _] = await Promise.all([
-          getBrowserLocation(),
-          loadAMapScript(AMAP_KEY),
-        ]);
+      updateStatus('正在加载高德地图...', true);
 
-        // 2. 初始化地图
-        map = new AMap.Map('map', { zoom: 14, resizeEnable: true });
-        map.addControl(new AMap.Scale());
+      var script = document.createElement('script');
+      script.src = 'https://webapi.amap.com/maps?v=2.0&key=' + AMAP_KEY + '&plugin=AMap.PlaceSearch,AMap.Scale';
+      script.onload = function() {
+        var tries = 0;
+        var check = setInterval(function() {
+          tries++;
+          if (window.AMap && window.AMap.Map && window.AMap.PlaceSearch) {
+            clearInterval(check);
+            onAMapReady();
+          } else if (tries > 50) {
+            clearInterval(check);
+            updateStatus('地图加载超时', false);
+            showError('高德地图加载超时，请检查 Key 是否正确');
+          }
+        }, 200);
+      };
+      script.onerror = function() {
+        updateStatus('加载失败', false);
+        showError('高德地图脚本加载失败，请检查网络');
+      };
+      document.head.appendChild(script);
+    }
 
-        // 3. 搜索
-        setupMapAndSearch(location.lng, location.lat);
-      } catch (e) {
-        console.error(e);
-        updateStatus('失败', false);
-        showError(e.message || '加载失败，请检查网络后刷新重试');
-      }
+    function onAMapReady() {
+      map = new AMap.Map('map', { zoom: 14, resizeEnable: true });
+      map.addControl(new AMap.Scale());
+      document.getElementById('subtitle').textContent = '地图已加载，正在定位...';
+      updateStatus('地图已加载', false);
+
+      // 地图加载完了，开始定位（加上延迟确保地图渲染完）
+      setTimeout(tryGeolocation, 500);
     }
 
     main();
