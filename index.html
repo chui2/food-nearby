@@ -59,49 +59,51 @@
       box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-size: 12px; white-space: nowrap;
       font-weight: 600; color: #ff6b35;
     }
-    .no-geo-banner {
+    .debug-bar {
       background: #fff3cd; color: #856404; padding: 8px 16px;
       font-size: 12px; text-align: center; border-bottom: 1px solid #ffc107;
     }
-    .no-geo-banner a { color: #ff6b35; cursor: pointer; text-decoration: underline; }
+    .debug-bar a { color: #ff6b35; cursor: pointer; text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>附近美食</h1>
-    <p id="subtitle">正在准备...</p>
+    <h1 id="title">附近美食</h1>
+    <p id="subtitle">初始化中...</p>
   </div>
-  <!-- 地图会立即渲染，不依赖任何异步 -->
   <div id="map"></div>
-  <!-- 定位提示条（默认隐藏） -->
-  <div class="no-geo-banner" id="noGeoBanner" style="display:none;">
-    ⚠️ 未获取到精确位置，当前显示 <b id="cityName">附近</b> 的结果。
-    <a onclick="retryGeo()">点击重试定位</a>
-  </div>
-  <div class="status-bar" id="statusBar">
-    <div class="spinner" id="spinner"></div>
-    <span id="statusText">正在初始化地图...</span>
+  <div class="debug-bar" id="debugBar" style="display:none;">
+    <span id="debugMsg"></span>
   </div>
   <div class="list" id="list">
     <div class="empty">
       <div class="emoji">📍</div>
-      <p>初始化中...</p>
+      <p id="listMsg">加载中...</p>
     </div>
   </div>
 
   <script>
-    // ===== 配置 =====
     var AMAP_KEY = '7d3a1e74b331280d4261b104d9d686b7';
     window._AMapSecurityConfig = { securityJsCode: '' };
   </script>
-  <!-- 常规 script 标签加载，不搞动态加载那一套 -->
-  <script src="https://webapi.amap.com/maps?v=2.0&key=7d3a1e74b331280d4261b104d9d686b7&plugin=AMap.PlaceSearch,AMap.Scale,AMap.Geolocation,AMap.CitySearch"></script>
+  <!-- 只加载基础地图，不加载任何插件 -->
+  <script src="https://webapi.amap.com/maps?v=2.0&key=7d3a1e74b331280d4261b104d9d686b7"></script>
   <script>
-    var map, placeSearch, citySearch, geolocation;
-    var markers = [];
-    var userLocated = false;
+    var map, placeSearch, markers = [];
+    var _lng, _lat, _located = false;
 
     function $(id) { return document.getElementById(id); }
+
+    function status(text) {
+      $('subtitle').textContent = text;
+      $('listMsg').textContent = text;
+    }
+
+    function debug(text) {
+      $('debugBar').style.display = '';
+      $('debugMsg').textContent = text;
+      console.log('[DEBUG]', text);
+    }
 
     var cuisineIcons = {
       '中餐': '🥢', '火锅': '🫕', '烧烤': '🍖', '面馆': '🍜', '面条': '🍜',
@@ -113,31 +115,20 @@
       '饺子': '🥟', '粤菜': '🥘', '川菜': '🌶️', '湘菜': '🌶️', '新疆': '🍖',
     };
 
-    function updateStatus(text, showSpinner) {
-      $('statusText').textContent = text;
-      $('spinner').style.display = showSpinner ? '' : 'none';
-    }
-
     function getIcon(type) {
       var t = type || '';
-      for (var key in cuisineIcons) {
-        if (t.indexOf(key) !== -1) return { icon: cuisineIcons[key], bg: '#fff5f0' };
-      }
+      for (var k in cuisineIcons) { if (t.indexOf(k) !== -1) return { icon: cuisineIcons[k], bg: '#fff5f0' }; }
       return { icon: '🍴', bg: '#fff5f0' };
-    }
-
-    function clearMarkers() {
-      for (var i = 0; i < markers.length; i++) markers[i].setMap(null);
-      markers = [];
     }
 
     function renderList(pois) {
       var list = $('list');
-      if (pois.length === 0) {
+      if (!pois || pois.length === 0) {
         list.innerHTML = '<div class="empty"><div class="emoji">😔</div><p>10km 内没有搜到美食</p></div>';
         return;
       }
-      clearMarkers();
+      for (var i = 0; i < markers.length; i++) markers[i].setMap(null);
+      markers = [];
       list.innerHTML = '';
 
       for (var i = 0; i < pois.length; i++) {
@@ -145,20 +136,20 @@
           var ig = getIcon(p.type);
           var dist = p.distance < 1000 ? p.distance + 'm' : (p.distance / 1000).toFixed(1) + 'km';
 
-          var marker = new AMap.Marker({
+          var m = new AMap.Marker({
             position: [p.lng, p.lat],
             content: '<div class="marker-label">' + (idx + 1) + '</div>',
             offset: new AMap.Pixel(-14, -14),
           });
-          marker.setMap(map);
-          marker.on('click', function() {
+          m.setMap(map);
+          m.on('click', function() {
             new AMap.InfoWindow({
               content: '<div style="padding:4px;"><b>' + p.name + '</b><br>' + (p.type || '美食') + '<br>⭐ ' + p.rating + ' | 📍 ' + dist + '<br><span style="color:#999;font-size:12px;">' + (p.address || '') + '</span></div>',
               offset: new AMap.Pixel(0, -30),
             }).open(map, [p.lng, p.lat]);
             map.setZoomAndCenter(16, [p.lng, p.lat]);
           });
-          markers.push(marker);
+          markers.push(m);
 
           var card = document.createElement('div');
           card.className = 'card';
@@ -174,47 +165,10 @@
               '</div>' +
             '</div>' +
             '<div class="arrow">›</div>';
-          card.addEventListener('click', function() {
-            map.setZoomAndCenter(16, [p.lng, p.lat]);
-          });
+          card.addEventListener('click', function() { map.setZoomAndCenter(16, [p.lng, p.lat]); });
           list.appendChild(card);
         })(pois[i], i);
       }
-    }
-
-    function doSearch(lng, lat) {
-      updateStatus('正在搜索美食...', true);
-      $('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
-
-      if (!placeSearch) {
-        placeSearch = new AMap.PlaceSearch({ pageSize: 50, pageIndex: 1, extensions: 'all' });
-      }
-      placeSearch.setLocation([lng, lat]);
-      placeSearch.setRadius(10000);
-
-      // PlaceSearch 不支持并发调用，每次调用会取消上一次。
-      // 改用单个关键词"美食"，高德 POI 分类中"美食"涵盖餐饮全品类。
-      placeSearch.search('美食', function(status, result) {
-        if (status === 'complete' && result && result.poiList) {
-          var pois = result.poiList.pois.filter(function(p) { return p.distance <= 10000; });
-          pois.sort(function(a, b) { return a.distance - b.distance; });
-          pois = pois.slice(0, 50);
-
-          if (pois.length === 0) {
-            renderList([]);
-            updateStatus('未找到结果', false);
-            $('subtitle').textContent = '10km 内没有搜到美食';
-            return;
-          }
-          renderList(pois);
-          updateStatus('找到 ' + pois.length + ' 家', false);
-          $('subtitle').textContent = '周围 10km 共 ' + pois.length + ' 家';
-        } else {
-          renderList([]);
-          updateStatus('搜索失败', false);
-          $('subtitle').textContent = '搜索失败，请确认高德 Key 白名单已添加 chui2.github.io';
-        }
-      });
     }
 
     function markUser(lng, lat) {
@@ -225,113 +179,146 @@
         zIndex: 100,
       }).setMap(map);
       new AMap.Circle({
-        center: [lng, lat],
-        radius: 10000,
-        strokeColor: '#ff6b35',
-        strokeWeight: 1,
-        strokeOpacity: 0.3,
-        fillColor: '#ff6b35',
-        fillOpacity: 0.05,
+        center: [lng, lat], radius: 10000,
+        strokeColor: '#ff6b35', strokeWeight: 1, strokeOpacity: 0.3,
+        fillColor: '#ff6b35', fillOpacity: 0.05,
       }).setMap(map);
     }
 
-    function onPosition(lng, lat, source) {
-      userLocated = true;
-      $('noGeoBanner').style.display = 'none';
-      $('subtitle').textContent = '已定位，正在搜索...';
-      updateStatus('已定位 (' + lng.toFixed(4) + ', ' + lat.toFixed(4) + ') [' + source + ']', false);
-      map.setZoomAndCenter(14, [lng, lat]);
-      markUser(lng, lat);
-      doSearch(lng, lat);
-    }
+    // ===== 核心：使用 AMap.plugin 显式加载 PlaceSearch =====
+    function doSearch(lng, lat) {
+      status('正在加载搜索组件...');
+      debug('AMap.plugin 加载 PlaceSearch...');
 
-    function useIPCity() {
-      updateStatus('使用IP城市定位...', true);
-      citySearch.getLocalCity(function(status, result) {
-        if (status === 'complete' && result && result.info === 'OK' && result.rectangle) {
-          // rectangle 格式: "lng1,lat1;lng2,lat2"
-          var parts = result.rectangle.split(';')[0].split(',');
-          var lng = parseFloat(parts[0]), lat = parseFloat(parts[1]);
-          $('noGeoBanner').style.display = '';
-          $('cityName').textContent = result.city || '该城市';
-          $('subtitle').textContent = '已定位到 ' + (result.city || '当前城市') + '（IP定位）';
-          updateStatus('使用 ' + (result.city || 'IP定位') + ' 的中心位置', false);
-          map.setZoomAndCenter(12, [lng, lat]);
-          markUser(lng, lat);
-          doSearch(lng, lat);
-        } else {
-          // 终极兜底：北京天安门
-          var defLng = 116.3974, defLat = 39.9092;
-          $('noGeoBanner').style.display = '';
-          $('cityName').textContent = '默认位置';
-          $('subtitle').textContent = '无法定位，使用默认位置';
-          updateStatus('使用默认位置（北京）', false);
-          map.setZoomAndCenter(12, [defLng, defLat]);
-          markUser(defLng, defLat);
-          doSearch(defLng, defLat);
-        }
+      AMap.plugin('AMap.PlaceSearch', function() {
+        debug('PlaceSearch 插件加载完成，开始搜索');
+        status('正在搜索美食...');
+
+        placeSearch = new AMap.PlaceSearch({ pageSize: 50, pageIndex: 1, extensions: 'all' });
+        placeSearch.setLocation([lng, lat]);
+        placeSearch.setRadius(10000);
+
+        $('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
+
+        // 搜索 + 超时保护
+        var searchDone = false;
+        var searchTimer = setTimeout(function() {
+          if (searchDone) return;
+          searchDone = true;
+          debug('搜索超时（15秒），请检查 Key 白名单是否包含当前域名');
+          status('搜索超时，请检查 Key 配置');
+          $('list').innerHTML = '<div class="error"><p>❌ 搜索超时</p><p style="font-size:13px;margin-top:8px;">请确认高德 Key 白名单已添加当前域名</p><button class="btn" onclick="location.reload()" style="margin-top:12px;">重新加载</button></div>';
+        }, 15000);
+
+        placeSearch.search('美食', function(status, result) {
+          if (searchDone) return;
+          searchDone = true;
+          clearTimeout(searchTimer);
+
+          debug('搜索回调: status=' + status + ', pois=' + (result && result.poiList ? result.poiList.pois.length : '0'));
+          console.log('PlaceSearch result:', status, result);
+
+          if (status === 'complete' && result && result.poiList && result.poiList.pois.length > 0) {
+            var pois = [];
+            for (var i = 0; i < result.poiList.pois.length; i++) {
+              if (result.poiList.pois[i].distance <= 10000) {
+                pois.push(result.poiList.pois[i]);
+              }
+            }
+            pois.sort(function(a, b) { return a.distance - b.distance; });
+            pois = pois.slice(0, 50);
+
+            if (pois.length === 0) {
+              renderList([]);
+              status('10km 内没有找到餐厅');
+              return;
+            }
+            renderList(pois);
+            status('找到 ' + pois.length + ' 家美食');
+            $('title').textContent = '附近美食 (' + pois.length + '家)';
+          } else if (status === 'no_data') {
+            renderList([]);
+            status('此区域暂无餐厅数据');
+          } else {
+            debug('搜索失败: ' + JSON.stringify(result));
+            $('list').innerHTML = '<div class="error"><p>❌ 搜索失败</p><p style="font-size:13px;margin-top:8px;">' + (result && result.message || '未知错误') + '</p><button class="btn" onclick="location.reload()" style="margin-top:12px;">重新加载</button></div>';
+            status('搜索失败');
+          }
+        });
       });
     }
 
+    // ===== 定位 =====
     function tryGPS() {
-      if (!navigator.geolocation) {
-        useIPCity();
-        return;
-      }
-      updateStatus('获取GPS位置...', true);
+      if (!navigator.geolocation) { fallbackIP(); return; }
 
+      status('正在GPS定位...');
+      debug('尝试浏览器GPS定位...');
       var settled = false;
-      function settle(lng, lat, src) {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        onPosition(lng, lat, src);
-      }
 
       var timer = setTimeout(function() {
-        // GPS 8 秒没反应，降级到 IP 定位
         if (settled) return;
         settled = true;
-        updateStatus('GPS超时，尝试IP定位...', true);
-        useIPCity();
+        debug('GPS超时(8s)，降级IP定位');
+        fallbackIP();
       }, 8000);
 
       navigator.geolocation.getCurrentPosition(
-        function(pos) { settle(pos.coords.longitude, pos.coords.latitude, 'GPS'); },
+        function(pos) {
+          if (settled) return;
+          settled = true; clearTimeout(timer);
+          _lng = pos.coords.longitude; _lat = pos.coords.latitude;
+          debug('GPS成功: ' + _lng.toFixed(4) + ',' + _lat.toFixed(4));
+          _located = true;
+          status('已定位，搜索中...');
+          map.setZoomAndCenter(14, [_lng, _lat]);
+          markUser(_lng, _lat);
+          doSearch(_lng, _lat);
+        },
         function(err) {
           if (settled) return;
-          settled = true;
-          if (timer) clearTimeout(timer);
-          updateStatus('GPS失败，尝试IP定位...', true);
-          useIPCity();
+          settled = true; clearTimeout(timer);
+          debug('GPS失败: code=' + err.code);
+          fallbackIP();
         },
         { enableHighAccuracy: true, timeout: 7000, maximumAge: 120000 }
       );
     }
 
-    function retryGeo() {
-      $('noGeoBanner').style.display = 'none';
-      tryGPS();
+    function fallbackIP() {
+      debug('尝试IP城市定位...');
+      AMap.plugin('AMap.CitySearch', function() {
+        var cs = new AMap.CitySearch();
+        cs.getLocalCity(function(status, result) {
+          if (status === 'complete' && result && result.info === 'OK' && result.rectangle) {
+            var parts = result.rectangle.split(';')[0].split(',');
+            _lng = parseFloat(parts[0]); _lat = parseFloat(parts[1]);
+            debug('IP定位: ' + (result.city || '') + ' ' + _lng.toFixed(4) + ',' + _lat.toFixed(4));
+            status('已定位到' + (result.city || '当前城市') + '（IP定位）');
+            map.setZoomAndCenter(12, [_lng, _lat]);
+            markUser(_lng, _lat);
+            doSearch(_lng, _lat);
+          } else {
+            debug('IP定位失败，使用默认位置');
+            _lng = 116.3974; _lat = 39.9092;
+            status('使用默认位置（北京）');
+            map.setZoomAndCenter(12, [_lng, _lat]);
+            markUser(_lng, _lat);
+            doSearch(_lng, _lat);
+          }
+        });
+      });
     }
 
-    // ===== 主入口：AMap 脚本加载完成后立即执行 =====
+    // ===== 主入口 =====
     function init() {
-      updateStatus('初始化地图...', true);
-
-      // 1. 创建地图（立即可见）
+      debug('AMap脚本加载完成，初始化地图...');
       map = new AMap.Map('map', { zoom: 12, center: [116.3974, 39.9092], resizeEnable: true });
       map.addControl(new AMap.Scale());
-      $('subtitle').textContent = '地图已就绪，正在定位...';
-
-      // 2. 初始化服务
-      placeSearch = new AMap.PlaceSearch({ pageSize: 25, pageIndex: 1, extensions: 'all' });
-      citySearch = new AMap.CitySearch();
-
-      // 3. 先尝试GPS，8秒超时后降级IP定位
+      debug('地图已创建');
       tryGPS();
     }
 
-    // AMap 脚本加载即执行
     init();
   </script>
 </body>
