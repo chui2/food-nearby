@@ -187,49 +187,34 @@
       $('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
 
       if (!placeSearch) {
-        placeSearch = new AMap.PlaceSearch({ pageSize: 25, pageIndex: 1, extensions: 'all' });
+        placeSearch = new AMap.PlaceSearch({ pageSize: 50, pageIndex: 1, extensions: 'all' });
       }
       placeSearch.setLocation([lng, lat]);
       placeSearch.setRadius(10000);
 
-      var keywords = ['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃'];
-      var all = [];
-      var done = 0;
+      // PlaceSearch 不支持并发调用，每次调用会取消上一次。
+      // 改用单个关键词"美食"，高德 POI 分类中"美食"涵盖餐饮全品类。
+      placeSearch.search('美食', function(status, result) {
+        if (status === 'complete' && result && result.poiList) {
+          var pois = result.poiList.pois.filter(function(p) { return p.distance <= 10000; });
+          pois.sort(function(a, b) { return a.distance - b.distance; });
+          pois = pois.slice(0, 50);
 
-      for (var k = 0; k < keywords.length; k++) {
-        (function(kw) {
-          placeSearch.search(kw, function(status, result) {
-            done++;
-            if (status === 'complete' && result && result.poiList) {
-              for (var j = 0; j < result.poiList.pois.length; j++) {
-                if (result.poiList.pois[j].distance <= 10000) {
-                  all.push(result.poiList.pois[j]);
-                }
-              }
-            }
-            if (done === keywords.length) {
-              if (all.length === 0) {
-                renderList([]);
-                updateStatus('未找到结果', false);
-                $('subtitle').textContent = '10km 内没有搜到美食';
-                return;
-              }
-              // 去重
-              var seen = {};
-              var unique = [];
-              for (var i = 0; i < all.length; i++) {
-                var key = all[i].name + '|' + all[i].address;
-                if (!seen[key]) { seen[key] = true; unique.push(all[i]); }
-              }
-              unique.sort(function(a, b) { return a.distance - b.distance; });
-              unique = unique.slice(0, 50);
-              renderList(unique);
-              updateStatus('找到 ' + unique.length + ' 家', false);
-              $('subtitle').textContent = '周围 10km 共 ' + unique.length + ' 家';
-            }
-          });
-        })(keywords[k]);
-      }
+          if (pois.length === 0) {
+            renderList([]);
+            updateStatus('未找到结果', false);
+            $('subtitle').textContent = '10km 内没有搜到美食';
+            return;
+          }
+          renderList(pois);
+          updateStatus('找到 ' + pois.length + ' 家', false);
+          $('subtitle').textContent = '周围 10km 共 ' + pois.length + ' 家';
+        } else {
+          renderList([]);
+          updateStatus('搜索失败', false);
+          $('subtitle').textContent = '搜索失败，请确认高德 Key 白名单已添加 chui2.github.io';
+        }
+      });
     }
 
     function markUser(lng, lat) {
