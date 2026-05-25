@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>附近美食</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; background: #f5f5f5; }
+    #map { width: 100%; height: 55vh; }
+    .header {
+      background: linear-gradient(135deg, #ff6b35, #f7931e);
+      color: #fff; padding: 16px 20px; text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header p { font-size: 13px; opacity: 0.9; margin-top: 4px; }
+    .status-bar {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 10px; background: #fff; font-size: 13px; color: #666;
+      border-bottom: 1px solid #eee;
+    }
+    .spinner {
+      width: 16px; height: 16px; border: 2px solid #ddd;
+      border-top-color: #ff6b35; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .list { padding: 12px 16px; overflow-y: auto; max-height: calc(45vh - 100px); }
+    .card {
+      background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      display: flex; gap: 12px; align-items: center; cursor: pointer;
+      transition: transform 0.15s;
+    }
+    .card:active { transform: scale(0.98); }
+    .card .icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; flex-shrink: 0;
+    }
+    .card .info { flex: 1; min-width: 0; }
+    .card .name { font-size: 16px; font-weight: 600; color: #222; }
+    .card .type { font-size: 12px; color: #999; margin-top: 2px; }
+    .card .rating { font-size: 12px; color: #f5a623; margin-top: 2px; }
+    .card .meta { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+    .card .distance { font-size: 13px; color: #ff6b35; font-weight: 500; }
+    .card .address { font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card .arrow { color: #ccc; font-size: 18px; flex-shrink: 0; }
+    .empty { text-align: center; padding: 40px 20px; color: #999; }
+    .empty .emoji { font-size: 48px; margin-bottom: 12px; }
+    .error { text-align: center; padding: 40px 20px; color: #e74c3c; }
+    .btn {
+      display: inline-block; padding: 10px 24px; background: #ff6b35;
+      color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+    }
+    .marker-label {
+      background: #fff; padding: 2px 7px; border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-size: 12px; white-space: nowrap;
+      font-weight: 600; color: #ff6b35;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>附近美食</h1>
+    <p id="subtitle">正在定位...</p>
+  </div>
+  <div class="status-bar" id="statusBar">
+    <div class="spinner" id="spinner"></div>
+    <span id="statusText">正在加载...</span>
+  </div>
+  <div id="map"></div>
+  <div class="list" id="list">
+    <div class="empty">
+      <div class="emoji">📍</div>
+      <p>加载中...</p>
+    </div>
+  </div>
+
+  <script>
+    // ================================================
+    //  把下面这行替换成你的高德地图 Key（必填）
+    //  申请地址：https://console.amap.com/dev/key/app
+    // ================================================
+    const AMAP_KEY = '7d3a1e74b331280d4261b104d9d686b7';
+    // ================================================
+
+    window._AMapSecurityConfig = { securityJsCode: '' };
+
+    let map, placeSearch, markers = [];
+
+    const cuisineIcons = {
+      '中餐': '🥢', '火锅': '🫕', '烧烤': '🍖', '面馆': '🍜', '面条': '🍜',
+      '小吃': '🍢', '快餐': '🍔', '汉堡': '🍔', '炸鸡': '🍗',
+      '日本': '🍣', '日料': '🍣', '寿司': '🍣', '韩国': '🇰🇷', '韩式': '🇰🇷',
+      '西餐': '🥩', '牛排': '🥩', '咖啡': '☕', '茶': '🍵',
+      '海鲜': '🦐', '串串': '🍡', '麻辣烫': '🌶️', '自助': '🍽️',
+      '面包': '🥐', '蛋糕': '🍰', '甜品': '🍰', '冰淇淋': '🍦', '披萨': '🍕',
+      '饺子': '🥟', '粤菜': '🥘', '川菜': '🌶️', '湘菜': '🌶️', '新疆': '🍖',
+    };
+
+    function updateStatus(text, showSpinner) {
+      document.getElementById('statusText').textContent = text;
+      document.getElementById('spinner').style.display = showSpinner ? '' : 'none';
+    }
+
+    function showError(msg) {
+      document.getElementById('list').innerHTML = `
+        <div class="error">
+          <p>❌ ${msg}</p>
+          <button class="btn" onclick="location.reload()" style="margin-top:12px;">重新加载</button>
+        </div>`;
+      updateStatus('出错了', false);
+    }
+
+    function getIcon(type) {
+      const t = type || '';
+      for (const [key, icon] of Object.entries(cuisineIcons)) {
+        if (t.includes(key)) return { icon, bg: '#fff5f0' };
+      }
+      return { icon: '🍴', bg: '#fff5f0' };
+    }
+
+    function clearMarkers() {
+      markers.forEach(m => m.setMap(null));
+      markers = [];
+    }
+
+    function renderList(pois) {
+      const list = document.getElementById('list');
+      if (pois.length === 0) {
+        list.innerHTML = '<div class="empty"><div class="emoji">😔</div><p>10km 内没有搜到美食</p></div>';
+        return;
+      }
+      clearMarkers();
+      list.innerHTML = '';
+
+      pois.forEach((p, i) => {
+        const { icon, bg } = getIcon(p.type);
+        const dist = p.distance < 1000 ? `${p.distance}m` : `${(p.distance / 1000).toFixed(1)}km`;
+
+        // 地图标记
+        const marker = new AMap.Marker({
+          position: [p.lng, p.lat],
+          content: `<div class="marker-label">${i + 1}</div>`,
+          offset: new AMap.Pixel(-14, -14),
+        });
+        marker.setMap(map);
+        marker.on('click', () => {
+          new AMap.InfoWindow({
+            content: `<div style="padding:4px;"><b>${p.name}</b><br>${p.type || '美食'}<br>⭐ ${p.rating}  📍 ${dist}<br><span style="color:#999;font-size:12px;">${p.address || ''}</span></div>`,
+            offset: new AMap.Pixel(0, -30),
+          }).open(map, [p.lng, p.lat]);
+          map.setZoomAndCenter(16, [p.lng, p.lat]);
+        });
+        markers.push(marker);
+
+        // 列表卡片
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <div class="icon" style="background:${bg}">${icon}</div>
+          <div class="info">
+            <div class="name">${i + 1}. ${p.name}</div>
+            <div class="type">${p.type || '美食'}</div>
+            <div class="rating">⭐ ${p.rating}</div>
+            <div class="meta">
+              <span class="distance">📍 ${dist}</span>
+              <span class="address">${p.address || ''}</span>
+            </div>
+          </div>
+          <div class="arrow">›</div>
+        `;
+        card.addEventListener('click', () => map.setZoomAndCenter(16, [p.lng, p.lat]));
+        list.appendChild(card);
+      });
+    }
+
+    function searchNearby(keywords) {
+      updateStatus('正在搜索附近美食...', true);
+      document.getElementById('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
+
+      let allResults = [];
+      let completed = 0;
+
+      keywords.forEach(keyword => {
+        placeSearch.search(keyword, (status, result) => {
+          completed++;
+          if (status === 'complete' && result.poiList) {
+            allResults = allResults.concat(
+              result.poiList.pois.filter(p => p.distance <= 10000)
+            );
+          }
+          if (completed === keywords.length) {
+            // 去重
+            const seen = new Set();
+            const pois = allResults
+              .filter(p => {
+                const key = `${p.name}|${p.address}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              })
+              .sort((a, b) => a.distance - b.distance)
+              .slice(0, 50);
+
+            renderList(pois);
+            updateStatus(`找到 ${pois.length} 家美食`, false);
+            document.getElementById('subtitle').textContent = `周围 10km 共 ${pois.length} 家`;
+          }
+        });
+      });
+    }
+
+    // --- 动态加载高德 JS API ---
+    function loadAMapScript(key) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.Geolocation,AMap.PlaceSearch,AMap.Scale`;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('高德地图脚本加载失败'));
+        document.head.appendChild(script);
+      });
+    }
+
+    // --- 主流程 ---
+    async function main() {
+      if (AMAP_KEY === 'YOUR_AMAP_KEY') {
+        updateStatus('⛔ 请先配置 API Key', false);
+        document.getElementById('list').innerHTML = `
+          <div class="error">
+            <p>⚠️ 尚未配置高德地图 API Key</p>
+            <div style="font-size:13px;color:#666;margin-top:12px;line-height:1.8;max-width:360px;margin-left:auto;margin-right:auto;">
+              <b>申请步骤：</b>
+              <ol style="text-align:left;padding-left:20px;">
+                <li>访问 <a href="https://lbs.amap.com/" target="_blank">高德开放平台</a> 注册</li>
+                <li>进入「应用管理」创建应用，获取 Key</li>
+                <li>将 Key 填入本文件开头的 <code style="background:#eee;padding:1px 5px;border-radius:3px;">AMAP_KEY</code></li>
+                <li>刷新页面</li>
+              </ol>
+              <p style="margin-top:8px;color:#999;">（只改一处即可，Key 会自动注入到地图脚本）</p>
+            </div>
+          </div>`;
+        return;
+      }
+
+      try {
+        updateStatus('正在加载高德地图...', true);
+        await loadAMapScript(AMAP_KEY);
+
+        map = new AMap.Map('map', { zoom: 14, resizeEnable: true });
+        map.addControl(new AMap.Scale());
+
+        await new Promise((resolve, reject) => {
+          AMap.plugin(['AMap.Geolocation', 'AMap.PlaceSearch'], resolve);
+        });
+
+        updateStatus('正在定位...', true);
+
+        const geolocation = new AMap.Geolocation({
+          enableHighAccuracy: true,
+          timeout: 15000,
+          GeoLocationFirst: true,
+        });
+
+        geolocation.getCurrentPosition((status, result) => {
+          if (status === 'complete' && result.position) {
+            const { lng, lat } = result.position;
+            document.getElementById('subtitle').textContent = '已定位，正在搜索...';
+            updateStatus(`已定位 (${lng.toFixed(4)}, ${lat.toFixed(4)})`, false);
+
+            map.setZoomAndCenter(14, [lng, lat]);
+
+            // 用户位置标记
+            new AMap.Marker({
+              position: [lng, lat],
+              content: '<div style="width:20px;height:20px;background:#4285f4;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(66,133,244,0.6);"></div>',
+              offset: new AMap.Pixel(-10, -10),
+              zIndex: 100,
+            }).setMap(map);
+
+            // 10km 范围圈
+            new AMap.Circle({
+              center: [lng, lat],
+              radius: 10000,
+              strokeColor: '#ff6b35',
+              strokeWeight: 1,
+              strokeOpacity: 0.3,
+              fillColor: '#ff6b35',
+              fillOpacity: 0.05,
+            }).setMap(map);
+
+            // 初始化搜索
+            placeSearch = new AMap.PlaceSearch({
+              pageSize: 25,
+              pageIndex: 1,
+              extensions: 'all',
+            });
+            placeSearch.setLocation([lng, lat]);
+            placeSearch.setRadius(10000);
+
+            searchNearby(['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃']);
+          } else {
+            updateStatus('定位失败', false);
+            showError('定位失败，请检查浏览器定位权限后刷新重试');
+          }
+        });
+      } catch (e) {
+        console.error(e);
+        updateStatus('加载失败', false);
+        showError('高德地图加载失败，请检查 Key 是否正确、网络是否正常');
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
