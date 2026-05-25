@@ -79,13 +79,7 @@
   </div>
 
   <script>
-    // ================================================
-    //  把下面这行替换成你的高德地图 Key（必填）
-    //  申请地址：https://console.amap.com/dev/key/app
-    // ================================================
     const AMAP_KEY = '7d3a1e74b331280d4261b104d9d686b7';
-    // ================================================
-
     window._AMapSecurityConfig = { securityJsCode: '' };
 
     let map, placeSearch, markers = [];
@@ -140,7 +134,6 @@
         const { icon, bg } = getIcon(p.type);
         const dist = p.distance < 1000 ? `${p.distance}m` : `${(p.distance / 1000).toFixed(1)}km`;
 
-        // 地图标记
         const marker = new AMap.Marker({
           position: [p.lng, p.lat],
           content: `<div class="marker-label">${i + 1}</div>`,
@@ -156,7 +149,6 @@
         });
         markers.push(marker);
 
-        // 列表卡片
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML = `
@@ -177,12 +169,14 @@
       });
     }
 
-    function searchNearby(keywords) {
+    function searchNearby(lng, lat) {
       updateStatus('正在搜索附近美食...', true);
       document.getElementById('list').innerHTML = '<div class="empty"><div class="emoji">🔍</div><p>正在搜索...</p></div>';
 
+      const keywords = ['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃'];
       let allResults = [];
       let completed = 0;
+      let failed = 0;
 
       keywords.forEach(keyword => {
         placeSearch.search(keyword, (status, result) => {
@@ -191,9 +185,14 @@
             allResults = allResults.concat(
               result.poiList.pois.filter(p => p.distance <= 10000)
             );
+          } else {
+            failed++;
           }
           if (completed === keywords.length) {
-            // 去重
+            if (allResults.length === 0 && failed > 0) {
+              showError('搜索失败，可能 Key 未配置域名白名单。请到高德开放平台将 chui2.github.io 加到白名单');
+              return;
+            }
             const seen = new Set();
             const pois = allResults
               .filter(p => {
@@ -213,14 +212,84 @@
       });
     }
 
-    // --- 动态加载高德 JS API ---
+    function setupMapAndSearch(lng, lat) {
+      document.getElementById('subtitle').textContent = '已定位，正在搜索...';
+      updateStatus(`已定位 (${lng.toFixed(4)}, ${lat.toFixed(4)})`, false);
+
+      map.setZoomAndCenter(14, [lng, lat]);
+
+      // 用户位置标记
+      new AMap.Marker({
+        position: [lng, lat],
+        content: '<div style="width:20px;height:20px;background:#4285f4;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(66,133,244,0.6);"></div>',
+        offset: new AMap.Pixel(-10, -10),
+        zIndex: 100,
+      }).setMap(map);
+
+      // 10km 范围圈
+      new AMap.Circle({
+        center: [lng, lat],
+        radius: 10000,
+        strokeColor: '#ff6b35',
+        strokeWeight: 1,
+        strokeOpacity: 0.3,
+        fillColor: '#ff6b35',
+        fillOpacity: 0.05,
+      }).setMap(map);
+
+      placeSearch = new AMap.PlaceSearch({
+        pageSize: 25,
+        pageIndex: 1,
+        extensions: 'all',
+      });
+      placeSearch.setLocation([lng, lat]);
+      placeSearch.setRadius(10000);
+
+      searchNearby(lng, lat);
+    }
+
     function loadAMapScript(key) {
       return new Promise((resolve, reject) => {
+        if (window.AMap) { resolve(); return; }
         const script = document.createElement('script');
-        script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.Geolocation,AMap.PlaceSearch,AMap.Scale`;
-        script.onload = resolve;
+        script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.PlaceSearch,AMap.Scale`;
+        script.onload = () => {
+          // 等 AMap 真正就绪
+          let tries = 0;
+          const check = setInterval(() => {
+            tries++;
+            if (window.AMap && window.AMap.Map) {
+              clearInterval(check);
+              resolve();
+            } else if (tries > 30) {
+              clearInterval(check);
+              reject(new Error('AMap 初始化超时'));
+            }
+          }, 200);
+        };
         script.onerror = () => reject(new Error('高德地图脚本加载失败'));
         document.head.appendChild(script);
+      });
+    }
+
+    function getBrowserLocation() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('浏览器不支持定位'));
+          return;
+        }
+        updateStatus('正在获取位置（需授权）...', true);
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lng: pos.coords.longitude, lat: pos.coords.latitude }),
+          err => {
+            let msg = '定位失败';
+            if (err.code === 1) msg = '请允许定位权限后刷新页面';
+            else if (err.code === 2) msg = '无法获取位置信息，请检查设备GPS';
+            else if (err.code === 3) msg = '定位超时，请刷新重试';
+            reject(new Error(msg));
+          },
+          { enableHighAccuracy: true, timeout: 20000, maximumAge: 120000 }
+        );
       });
     }
 
@@ -229,87 +298,28 @@
       if (AMAP_KEY === 'YOUR_AMAP_KEY') {
         updateStatus('⛔ 请先配置 API Key', false);
         document.getElementById('list').innerHTML = `
-          <div class="error">
-            <p>⚠️ 尚未配置高德地图 API Key</p>
-            <div style="font-size:13px;color:#666;margin-top:12px;line-height:1.8;max-width:360px;margin-left:auto;margin-right:auto;">
-              <b>申请步骤：</b>
-              <ol style="text-align:left;padding-left:20px;">
-                <li>访问 <a href="https://lbs.amap.com/" target="_blank">高德开放平台</a> 注册</li>
-                <li>进入「应用管理」创建应用，获取 Key</li>
-                <li>将 Key 填入本文件开头的 <code style="background:#eee;padding:1px 5px;border-radius:3px;">AMAP_KEY</code></li>
-                <li>刷新页面</li>
-              </ol>
-              <p style="margin-top:8px;color:#999;">（只改一处即可，Key 会自动注入到地图脚本）</p>
-            </div>
-          </div>`;
+          <div class="error"><p>⚠️ 尚未配置高德地图 API Key</p></div>`;
         return;
       }
 
       try {
-        updateStatus('正在加载高德地图...', true);
-        await loadAMapScript(AMAP_KEY);
+        // 1. 并行：浏览器定位 + 加载高德地图
+        updateStatus('正在加载...', true);
+        const [location, _] = await Promise.all([
+          getBrowserLocation(),
+          loadAMapScript(AMAP_KEY),
+        ]);
 
+        // 2. 初始化地图
         map = new AMap.Map('map', { zoom: 14, resizeEnable: true });
         map.addControl(new AMap.Scale());
 
-        await new Promise((resolve, reject) => {
-          AMap.plugin(['AMap.Geolocation', 'AMap.PlaceSearch'], resolve);
-        });
-
-        updateStatus('正在定位...', true);
-
-        const geolocation = new AMap.Geolocation({
-          enableHighAccuracy: true,
-          timeout: 15000,
-          GeoLocationFirst: true,
-        });
-
-        geolocation.getCurrentPosition((status, result) => {
-          if (status === 'complete' && result.position) {
-            const { lng, lat } = result.position;
-            document.getElementById('subtitle').textContent = '已定位，正在搜索...';
-            updateStatus(`已定位 (${lng.toFixed(4)}, ${lat.toFixed(4)})`, false);
-
-            map.setZoomAndCenter(14, [lng, lat]);
-
-            // 用户位置标记
-            new AMap.Marker({
-              position: [lng, lat],
-              content: '<div style="width:20px;height:20px;background:#4285f4;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(66,133,244,0.6);"></div>',
-              offset: new AMap.Pixel(-10, -10),
-              zIndex: 100,
-            }).setMap(map);
-
-            // 10km 范围圈
-            new AMap.Circle({
-              center: [lng, lat],
-              radius: 10000,
-              strokeColor: '#ff6b35',
-              strokeWeight: 1,
-              strokeOpacity: 0.3,
-              fillColor: '#ff6b35',
-              fillOpacity: 0.05,
-            }).setMap(map);
-
-            // 初始化搜索
-            placeSearch = new AMap.PlaceSearch({
-              pageSize: 25,
-              pageIndex: 1,
-              extensions: 'all',
-            });
-            placeSearch.setLocation([lng, lat]);
-            placeSearch.setRadius(10000);
-
-            searchNearby(['美食', '餐厅', '火锅', '烧烤', '日料', '西餐', '快餐', '甜品', '咖啡', '面馆', '小吃']);
-          } else {
-            updateStatus('定位失败', false);
-            showError('定位失败，请检查浏览器定位权限后刷新重试');
-          }
-        });
+        // 3. 搜索
+        setupMapAndSearch(location.lng, location.lat);
       } catch (e) {
         console.error(e);
-        updateStatus('加载失败', false);
-        showError('高德地图加载失败，请检查 Key 是否正确、网络是否正常');
+        updateStatus('失败', false);
+        showError(e.message || '加载失败，请检查网络后刷新重试');
       }
     }
 
